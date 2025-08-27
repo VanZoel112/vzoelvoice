@@ -525,4 +525,99 @@ class VoiceCloneUserBot:
                 args = message.text.split()[1:] if len(message.text.split()) > 1 else []
                 
                 if not args or args[0] == "info":
-                    # Show session i
+                    # Show session info
+                    me = await client.get_me()
+                    session_file = Path(f"{Config.SESSION_NAME}.session")
+                    session_exists = session_file.exists()
+                    
+                    info = f"📋 **Session Information:**\n\n"
+                    info += f"👤 Name: {me.first_name} {me.last_name or ''}\n"
+                    info += f"📱 Phone: {me.phone_number}\n"
+                    info += f"🆔 User ID: {me.id}\n"
+                    info += f"📁 Session File: {'✅ Exists' if session_exists else '❌ Not Found'}\n"
+                    info += f"🔗 Status: Connected ✅"
+                    
+                    await message.edit(info)
+                
+                elif args[0] == "reset":
+                    await message.edit("🔄 **Resetting session...**\n"
+                                     "⚠️ Bot will restart after reset.")
+                    
+                    # Remove session file
+                    session_file = Path(f"{Config.SESSION_NAME}.session")
+                    if session_file.exists():
+                        session_file.unlink()
+                        
+                    # Remove session info
+                    info_file = Path("session_info.json")
+                    if info_file.exists():
+                        info_file.unlink()
+                    
+                    await asyncio.sleep(2)
+                    await message.edit("✅ Session reset complete!\n"
+                                     "🔄 Please restart the bot.")
+                    
+                    # Stop the client
+                    await client.stop()
+                    sys.exit(0)
+                
+            except Exception as e:
+                await message.edit(f"❌ Error: {str(e)}")
+    
+    async def run(self):
+        """Run the userbot"""
+        if await self.initialize():
+            print("🎉 Voice Clone UserBot is running!")
+            print("\n📋 Available Commands:")
+            print("  .voice start <character> - Start voice cloning")
+            print("  .voice stop - Stop voice cloning")  
+            print("  .voice list - List available characters")
+            print("  .voice status - Show voice clone status")
+            print("  .quick <character> - Quick character switch")
+            print("  .session info - Show session information")
+            print("  .session reset - Reset session (requires restart)")
+            print("\n⚠️  Press Ctrl+C to stop")
+            print("=" * 50)
+            
+            try:
+                await self.client.idle()
+            except KeyboardInterrupt:
+                print("\n👋 Shutting down...")
+                self.voice_engine.stop_voice_clone()
+                await self.client.stop()
+        else:
+            print("❌ Failed to start userbot!")
+
+# ================================
+# MAIN ENTRY POINT
+# ================================
+
+async def main():
+    """Main entry point"""
+    userbot = VoiceCloneUserBot()
+    await userbot.run()
+
+if __name__ == "__main__":
+    try:
+        # Check dependencies
+        import pyrogram
+        import scipy
+        import sounddevice
+        import numpy
+        
+        print("🔊 Voice Clone UserBot v2.0")
+        print("=" * 35)
+        print("Dependencies: ✅ All installed")
+        print()
+        
+        # Run the bot
+        asyncio.run(main())
+        
+    except ImportError as e:
+        print(f"❌ Missing dependency: {e}")
+        print("\n📦 Install required packages:")
+        print("pip install pyrogram scipy sounddevice numpy tgcrypto")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        sys.exit(1)
