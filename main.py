@@ -291,53 +291,114 @@ class VoiceCloneEngine:
         logging.info("Voice clone stopped")
 
 # ================================
-# TELEGRAM CLIENT & SESSION HANDLER
+# TELEGRAM SESSION MANAGER
 # ================================
 
-class UserBotSession:
+class SessionManager:
     def __init__(self):
+        self.session_path = Path(f"{Config.SESSION_NAME}.session")
         self.client = None
-        self.session_file = f"{Config.SESSION_NAME}.session"
         
-    async def create_session(self):
-        """Create or load existing session"""
+    def session_exists(self):
+        """Check if session file exists"""
+        return self.session_path.exists()
+    
+    async def create_new_session(self):
+        """Create new session with phone verification"""
+        print("🔐 Creating new session...")
+        print(f"📱 Phone Number: {Config.PHONE_NUMBER}")
+        
         try:
+            # Initialize client
             self.client = Client(
-                Config.SESSION_NAME,
+                name=Config.SESSION_NAME,
                 api_id=Config.API_ID,
                 api_hash=Config.API_HASH,
-                phone_number=Config.PHONE_NUMBER
+                phone_number=Config.PHONE_NUMBER,
+                workdir="."
             )
             
-            await self.client.start()
+            # Connect and request phone code
+            await self.client.connect()
+            sent_code = await self.client.send_code(Config.PHONE_NUMBER)
+            
+            # Request verification code from user
+            print(f"📨 Verification code sent to {Config.PHONE_NUMBER}")
+            phone_code = input("🔑 Enter the verification code: ").strip()
+            
+            try:
+                # Sign in with phone code
+                await self.client.sign_in(Config.PHONE_NUMBER, sent_code.phone_code_hash, phone_code)
+                print("✅ Phone verification successful!")
+                
+            except SessionPasswordNeeded:
+                # Handle 2FA if enabled
+                print("🔐 Two-Factor Authentication required")
+                password = input("🔑 Enter your 2FA password: ").strip()
+                await self.client.check_password(password)
+                print("✅ 2FA verification successful!")
             
             # Save session info
             session_info = {
-                "api_id": Config.API_ID,
-                "api_hash": Config.API_HASH,
                 "phone_number": Config.PHONE_NUMBER,
-                "session_created": True
+                "session_created": True,
+                "session_file": str(self.session_path)
             }
             
             with open("session_info.json", "w") as f:
                 json.dump(session_info, f, indent=2)
-                
-            logging.info("✅ Session created successfully!")
-            return self.client
             
-        except SessionPasswordNeeded:
-            password = input("🔐 Enter your 2FA password: ")
-            await self.client.check_password(password)
-            logging.info("✅ 2FA verification successful!")
-            return self.client
+            print(f"💾 Session saved as: {self.session_path}")
+            return True
             
         except PhoneCodeInvalid:
-            logging.error("❌ Invalid phone code!")
-            return None
+            print("❌ Invalid verification code!")
+            return False
+        except PhoneNumberInvalid:
+            print("❌ Invalid phone number!")
+            return False
+        except Exception as e:
+            print(f"❌ Session creation failed: {e}")
+            return False
+    
+    async def load_existing_session(self):
+        """Load existing session file"""
+        try:
+            print("📂 Loading existing session...")
+            
+            self.client = Client(
+                name=Config.SESSION_NAME,
+                api_id=Config.API_ID,
+                api_hash=Config.API_HASH,
+                workdir="."
+            )
+            
+            await self.client.start()
+            print("✅ Session loaded successfully!")
+            return True
             
         except Exception as e:
-            logging.error(f"❌ Session creation error: {e}")
-            return None
+            print(f"❌ Failed to load session: {e}")
+            print("🔄 Session file may be corrupted, creating new session...")
+            # Remove corrupted session file
+            if self.session_path.exists():
+                self.session_path.unlink()
+            return False
+    
+    async def get_client(self):
+        """Get authenticated Telegram client"""
+        # Check if session exists
+        if self.session_exists():
+            print("🔍 Existing session found")
+            if await self.load_existing_session():
+                return self.client
+        
+        # Create new session if not exists or loading failed
+        print("🆕 Creating new session...")
+        if await self.create_new_session():
+            return self.client
+        
+        return None
 
 # ================================
 # MAIN USERBOT APPLICATION
@@ -346,7 +407,7 @@ class UserBotSession:
 class VoiceCloneUserBot:
     def __init__(self):
         self.voice_engine = VoiceCloneEngine()
-        self.session_handler = UserBotSession()
+        self.session_manager = SessionManager()
         self.client = None
         
         # Setup logging
@@ -358,14 +419,21 @@ class VoiceCloneUserBot:
     async def initialize(self):
         """Initialize userbot client"""
         print("🚀 Initializing Voice Clone UserBot...")
-        print(f"📱 Phone: {Config.PHONE_NUMBER}")
         print("=" * 50)
         
-        self.client = await self.session_handler.create_session()
+        # Get authenticated client
+        self.client = await self.session_manager.get_client()
         if not self.client:
-            print("❌ Failed to create session!")
+            print("❌ Failed to authenticate with Telegram!")
             return False
-            
+        
+        # Get user info
+        me = await self.client.get_me()
+        print(f"👤 Logged in as: {me.first_name} {me.last_name or ''}")
+        print(f"📱 Phone: {me.phone_number}")
+        print(f"🆔 User ID: {me.id}")
+        print("=" * 50)
+        
         self.setup_handlers()
         return True
     
@@ -449,56 +517,12 @@ class VoiceCloneUserBot:
                 await message.edit(f"🎭 Switched to: **{char_name}**", delete_in=3)
             else:
                 await message.edit(f"❌ Character not found: {character}", delete_in=3)
-    
-    async def run(self):
-        """Run the userbot"""
-        if await self.initialize():
-            print("🎉 Voice Clone UserBot is running!")
-            print("Commands:")
-            print("  .voice start <character> - Start voice cloning")
-            print("  .voice stop - Stop voice cloning")  
-            print("  .voice list - List available characters")
-            print("  .quick <character> - Quick character switch")
-            print("\nPress Ctrl+C to stop")
-            
+        
+        @self.client.on_message(filters.command("session") & filters.me)
+        async def session_command(client, message):
+            """Session management command"""
             try:
-                await self.client.idle()
-            except KeyboardInterrupt:
-                print("\n👋 Shutting down...")
-                self.voice_engine.stop_voice_clone()
-        else:
-            print("❌ Failed to start userbot!")
-
-# ================================
-# MAIN ENTRY POINT
-# ================================
-
-async def main():
-    """Main entry point"""
-    userbot = VoiceCloneUserBot()
-    await userbot.run()
-
-if __name__ == "__main__":
-    try:
-        # Check dependencies
-        import pyrogram
-        import scipy
-        import sounddevice
-        import numpy
-        
-        print("🔊 Voice Clone UserBot")
-        print("=" * 30)
-        print("Dependencies: ✅ All installed")
-        print()
-        
-        # Run the bot
-        asyncio.run(main())
-        
-    except ImportError as e:
-        print(f"❌ Missing dependency: {e}")
-        print("\n📦 Install required packages:")
-        print("pip install pyrogram scipy sounddevice numpy tgcrypto")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        sys.exit(1)
+                args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+                
+                if not args or args[0] == "info":
+                    # Show session i
